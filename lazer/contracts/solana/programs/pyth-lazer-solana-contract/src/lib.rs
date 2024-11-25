@@ -1,23 +1,7 @@
 mod signature;
 
-pub mod storage {
-    use anchor_lang::prelude::{pubkey, Pubkey};
-
-    pub const ID: Pubkey = pubkey!("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
-
-    #[test]
-    fn test_storage_id() {
-        use {crate::STORAGE_SEED, anchor_lang::prelude::Pubkey};
-
-        assert_eq!(
-            Pubkey::find_program_address(&[STORAGE_SEED], &super::ID).0,
-            ID
-        );
-    }
-}
-
 use {
-    anchor_lang::{prelude::*, solana_program::pubkey::PUBKEY_BYTES},
+    anchor_lang::{prelude::*, solana_program::pubkey::PUBKEY_BYTES, system_program},
     std::mem::size_of,
 };
 
@@ -27,6 +11,21 @@ pub use {
 };
 
 declare_id!("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
+
+pub const STORAGE_ID: Pubkey = pubkey!("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
+pub const TREASURY_ID: Pubkey = pubkey!("EN4aB3soE5iuCG2fGj2r5fksh4kLRVPV8g7N86vXm8WM");
+
+#[test]
+fn test_ids() {
+    assert_eq!(
+        Pubkey::find_program_address(&[STORAGE_SEED], &ID).0,
+        STORAGE_ID
+    );
+    assert_eq!(
+        Pubkey::find_program_address(&[TREASURY_SEED], &ID).0,
+        TREASURY_ID
+    );
+}
 
 pub const MAX_NUM_TRUSTED_SIGNERS: usize = 2;
 
@@ -44,12 +43,14 @@ impl TrustedSignerInfo {
 pub struct Storage {
     pub top_authority: Pubkey,
     pub num_trusted_signers: u8,
+    pub single_update_fee_in_lamports: u64,
     pub trusted_signers: [TrustedSignerInfo; MAX_NUM_TRUSTED_SIGNERS],
 }
 
 impl Storage {
     const SERIALIZED_LEN: usize = PUBKEY_BYTES
         + size_of::<u8>()
+        + size_of::<u64>()
         + TrustedSignerInfo::SERIALIZED_LEN * MAX_NUM_TRUSTED_SIGNERS;
 
     pub fn initialized_trusted_signers(&self) -> &[TrustedSignerInfo] {
@@ -58,15 +59,18 @@ impl Storage {
 }
 
 pub const STORAGE_SEED: &[u8] = b"storage";
+pub const TREASURY_SEED: &[u8] = b"treasury";
 
 #[program]
 pub mod pyth_lazer_solana_contract {
+    use anchor_lang::system_program;
     use signature::VerifiedMessage;
 
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>, top_authority: Pubkey) -> Result<()> {
         ctx.accounts.storage.top_authority = top_authority;
+        ctx.accounts.storage.single_update_fee_in_lamports = 1;
         Ok(())
     }
 
@@ -128,6 +132,17 @@ pub mod pyth_lazer_solana_contract {
         signature_index: u8,
         message_offset: u16,
     ) -> Result<VerifiedMessage> {
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.payer.to_account_info(),
+                    to: ctx.accounts.treasury.to_account_info(),
+                },
+            ),
+            ctx.accounts.storage.single_update_fee_in_lamports,
+        )?;
+
         signature::verify_message(
             &ctx.accounts.storage,
             &ctx.accounts.sysvar,
@@ -155,6 +170,15 @@ pub struct Initialize<'info> {
         bump,
     )]
     pub storage: Account<'info, Storage>,
+    #[account(
+        init,
+        payer = payer,
+        space = 0,
+        owner = system_program::ID,
+        seeds = [TREASURY_SEED],
+        bump,
+    )]
+    pub treasury: AccountInfo<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -172,10 +196,20 @@ pub struct Update<'info> {
 
 #[derive(Accounts)]
 pub struct VerifyMessage<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
     #[account(
         seeds = [STORAGE_SEED],
         bump,
     )]
     pub storage: Account<'info, Storage>,
+    #[account(
+        mut,
+        owner = system_program::ID,
+        seeds = [TREASURY_SEED],
+        bump,
+    )]
+    pub treasury: AccountInfo<'info>,
+    pub system_program: Program<'info, System>,
     pub sysvar: AccountInfo<'info>,
 }
