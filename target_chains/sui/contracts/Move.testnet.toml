@@ -9,7 +9,7 @@ subdir = "crates/sui-framework/packages/sui-framework"
 rev = "framework/testnet"
 
 [dependencies.Wormhole]
-git = "https://github.com/wormhole-foundation/wormhole.git"
+git = "https://github.com/6xiaowu9/wormhole.git"
 subdir = "sui/wormhole"
 rev = "sui-upgrade-testnet"
 
